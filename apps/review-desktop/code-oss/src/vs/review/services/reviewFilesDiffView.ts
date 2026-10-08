@@ -1,4 +1,4 @@
-import type { ReviewDiffProgress, ReviewDiffLens, ReviewDiffViewSpec } from "../common/reviewProtocol.js";
+import type { ReviewDiffProgress, ReviewDiffProgressFile, ReviewDiffLens, ReviewDiffViewSpec } from "../common/reviewProtocol.js";
 import { Range } from "../../editor/common/core/range.js";
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) dev.fast. All rights reserved.
@@ -204,6 +204,7 @@ export class ReviewFilesDiffView extends Disposable {
 	private pendingSectionId: string | undefined;
 	private pendingSource: ReviewDiffLens["ranges"][number] | undefined;
 	private progress: ReviewDiffProgress | undefined;
+	private progressFiles = new Map<string, ReviewDiffProgressFile>();
 	private documentCollapsed = false;
 	private readonly initializedDocumentItems = new WeakSet<object>();
 	private readonly viewedApplied = new Map<string, string>();
@@ -534,7 +535,7 @@ export class ReviewFilesDiffView extends Disposable {
 	private readonly collapsedSections = new Set<string>();
 	private readonly sectionViewed = new Map<string, string>();
 	private entryProgress(entry: ReviewFilesEditorEntry) {
-		return (entry.sectionId ? this.progress?.sections?.find(section => section.id === entry.sectionId)?.files : this.progress?.files)?.find(file => file.path === entry.file.path);
+		return this.progressFiles.get(`${entry.sectionId ?? ''}:${entry.file.path}`);
 	}
 	private progressTooltip(entry: ReviewFilesEditorEntry): ReviewTooltipContent | undefined {
 		const file = this.entryProgress(entry);
@@ -542,6 +543,10 @@ export class ReviewFilesDiffView extends Disposable {
 	}
 	setProgress(progress: ReviewDiffProgress): void {
 		this.progress = progress;
+		this.progressFiles = new Map([
+			...progress.files.map(file => [`:${file.path}`, file] as const),
+			...(progress.sections ?? []).flatMap(section => (section.files ?? []).map(file => [`${section.id}:${file.path}`, file] as const)),
+		]);
 		for (const section of progress.sections ?? []) {
 			const previous = this.sectionViewed.get(section.id);
 			if (section.state === 'viewed' && previous !== 'viewed') this.collapsedSections.add(section.id);
@@ -587,32 +592,6 @@ export class ReviewFilesDiffView extends Disposable {
 		this.pendingPath = this.fileStates.has(path) ? path : undefined;
 		this.showStreamStatus();
 		if (!this.pendingPath) this.reveal(entry);
-	}
-
-	get viewportHeight(): number { return this.diffContainer.clientHeight; }
-
-	/**
-	 * Pixels from the reading line (the list's top edge) to the first line of
-	 * `source`, negative once scrolled past. Rendered files measure their
-	 * editor; the rest are placed by file order around the topmost file, a
-	 * million pixels per file, which keeps them sorted and on the right side.
-	 */
-	sourceOffset(source: ReviewDiffLens['ranges'][number]): number | undefined {
-		const entries = this.input?.entries ?? [];
-		const pathOf = (entry: (typeof entries)[number]) => source.side === 'base' ? entry.file.previousPath ?? entry.file.path : entry.file.path;
-		const index = entries.findIndex(entry => pathOf(entry) === source.file);
-		if (index < 0) return undefined;
-		const entry = entries[index]!;
-		const resource = source.side === 'base' ? entry.original : entry.modified;
-		const editor = resource && this.widget.tryGetCodeEditor(resource)?.editor;
-		const node = editor?.getDomNode();
-		if (editor && node) {
-			return node.getBoundingClientRect().top - this.diffContainer.getBoundingClientRect().top
-				+ editor.getTopForLineNumber(source.fromLine) - editor.getScrollTop();
-		}
-		const active = this.viewModel?.activeDiffItem.get();
-		const activeIndex = active ? entries.findIndex(e => sameResource(active.modifiedUri, e.modified) && sameResource(active.originalUri, e.original)) : 0;
-		return (index - Math.max(0, activeIndex)) * 1_000_000 + source.fromLine;
 	}
 
 	loadingFailed(message: string): void {

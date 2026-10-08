@@ -16,7 +16,7 @@ import { IInstantiationService } from "../../platform/instantiation/common/insta
 import { ServiceCollection } from "../../platform/instantiation/common/serviceCollection.js";
 import { IDiffProviderFactoryService } from "../../editor/browser/widget/diffEditor/diffProviderFactoryService.js";
 import { ICodeEditorService } from "../../editor/browser/services/codeEditorService.js";
-import type { IDiffEditor } from "../../editor/browser/editorBrowser.js";
+import type { ICodeEditor, IDiffEditor } from "../../editor/browser/editorBrowser.js";
 import { LineRange } from "../../editor/common/core/ranges/lineRange.js";
 import { DetailedLineRangeMapping } from "../../editor/common/diff/rangeMapping.js";
 import { autorun, type IObservable } from "../../base/common/observable.js";
@@ -26,7 +26,9 @@ import {
 	structuralContextScopes,
 	structuralRows,
 	structuralHighlights,
+	type StructuralGap,
 } from "../common/reviewStructuralDiff.js";
+import type { ITextModel } from "../../editor/common/model.js";
 import type { ReviewFilesEditorEntry } from "./reviewFilesDiffView.js";
 import { StructuralFoldControls, StructuralFoldHover } from "./reviewStructuralFolds.js";
 import { REVIEW_API_SOURCE_SCHEME } from "../common/reviewSourceView.js";
@@ -203,30 +205,34 @@ function attachStructuralEditors(
 	viewed?: StructuralViewedState,
 ): void {
 	const editors = instantiation.invokeFunction((a) => a.get(ICodeEditorService));
-	const pairs = new Map(entries.map((e) => [e.original!.toString() + "\n" + e.modified!.toString(), e.file.path]));
+	const sides = new Map(entries.flatMap((e) => [[e.original!.toString(), e.file.path], [e.modified!.toString(), e.file.path]] as const));
 	const watched = lifetime.add(new DisposableMap<IDiffEditor, DisposableStore>());
 	function watch(editor: IDiffEditor) {
 		const widget = editor as unknown as { unchangedRegions?: IObservable<readonly UnchangedRegion[]> };
 		if (!widget.unchangedRegions) return;
 		const store = new DisposableStore();
 		watched.set(editor, store);
+		// A reused editor swaps one side's model at a time.
+		const pathIn = (model: ITextModel | null) => model ? sides.get(model.uri.with({ fragment: "" }).toString()) : undefined;
 		const pathOf = () => {
 			const model = editor.getModel();
-			return model ? pairs.get(model.original.uri.with({ fragment: "" }).toString() + "\n" + model.modified.uri.with({ fragment: "" }).toString()) : undefined;
+			const path = pathIn(model?.original ?? null);
+			return path === pathIn(model?.modified ?? null) ? path : undefined;
 		};
+		const sideOf = (side: ICodeEditor) => () => pathIn(side.getModel());
 		const hover = new StructuralFoldHover();
-		store.add(new StructuralFoldControls(editor.getOriginalEditor(), "lhs", pathOf, session, widget.unchangedRegions, hover, viewed));
-		store.add(new StructuralFoldControls(editor.getModifiedEditor(), "rhs", pathOf, session, widget.unchangedRegions, hover, viewed));
+		store.add(new StructuralFoldControls(editor.getOriginalEditor(), "lhs", sideOf(editor.getOriginalEditor()), session, widget.unchangedRegions, hover, viewed));
+		store.add(new StructuralFoldControls(editor.getModifiedEditor(), "rhs", sideOf(editor.getModifiedEditor()), session, widget.unchangedRegions, hover, viewed));
 		let revealed = new Set<UnchangedRegion>();
 		store.add(
 			autorun((reader) => {
 				const path = pathOf();
 				const regions = widget.unchangedRegions!.read(reader);
 				if (!path || !session.getTextDiff(path)) return;
-				const gaps = structuralContextGaps(session.getTextDiff(path)!, (id) => session.isRegionCollapsed(path, id) === true, (id) => session.isRegionCollapsed(path, id));
+				let gaps: StructuralGap[] | undefined;
 				const next = new Set<UnchangedRegion>();
 				const gapOf = (region: UnchangedRegion) =>
-					gaps.find((g) => g.originalStart === region.originalLineNumber && g.modifiedStart === region.modifiedLineNumber && g.foldStateId === region.foldStateId);
+					(gaps ??= structuralContextGaps(session.getTextDiff(path)!, (id) => session.isRegionCollapsed(path, id) === true, (id) => session.isRegionCollapsed(path, id))).find((g) => g.originalStart === region.originalLineNumber && g.modifiedStart === region.modifiedLineNumber && g.foldStateId === region.foldStateId);
 				for (const region of regions) {
 					const shown = region.visibleLineCountTop.read(reader) + region.visibleLineCountBottom.read(reader);
 					const fullyShown = shown >= region.lineCount;

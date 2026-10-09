@@ -40,11 +40,22 @@ impl Agent {
         }
     }
 
-    pub(crate) fn detected(self) -> Result<bool> {
-        let home = home()?;
-        Ok(match self {
-            Agent::ClaudeCode => home.join(".claude").is_dir(),
-        })
+    /// The agents whose command is on PATH, which are the ones `config init`
+    /// can install the plugin for.
+    pub(crate) fn found() -> Vec<Agent> {
+        Agent::ALL
+            .into_iter()
+            .filter(|agent| match agent {
+                Agent::ClaudeCode => claude_path().is_some(),
+            })
+            .collect()
+    }
+
+    /// Why `config init` skips this agent: its command is not on PATH.
+    pub(crate) fn missing(self) -> &'static str {
+        match self {
+            Agent::ClaudeCode => CLAUDE_MISSING,
+        }
     }
 
     /// `step` hears what each slow command is about to do.
@@ -65,6 +76,18 @@ impl Agent {
                 }
                 step("Installing the diffr plugin in Claude Code");
                 claude(&["plugin", "install", PLUGIN, "--scope", "user"])?;
+                // Claude Code's PATH may lack diffr, as in a terminal opened
+                // before install.sh added it.
+                let binary = match Method::find()? {
+                    Method::Script(dir) => dir
+                        .join(format!("diffr{}", std::env::consts::EXE_SUFFIX))
+                        .to_string_lossy()
+                        .into_owned(),
+                    // On PATH, at a path that changes with each version.
+                    Method::Brew | Method::Cargo | Method::Whiteboard(_) => "diffr".to_owned(),
+                };
+                let values = serde_json::to_vec(&serde_json::json!({ "diffr": binary }))?;
+                claude_with_input(&["plugin", "configure", PLUGIN, "--values-stdin"], &values)?;
                 Ok(())
             }
         }
@@ -134,6 +157,8 @@ enum Method {
     Cargo,
     /// install.sh, or an archive extracted by hand, into this directory.
     Script(PathBuf),
+    /// Whiteboard's own copy, at this path in its node_modules.
+    Whiteboard(PathBuf),
 }
 
 impl Method {
@@ -145,11 +170,7 @@ impl Method {
             .to_owned();
         let parts: Vec<_> = exe.components().map(|part| part.as_os_str()).collect();
         if parts.iter().any(|part| *part == "node_modules") {
-            return Err(format!(
-                "{} is likely managed by Whiteboard; skipping automatic deletion for safety (remove via Whiteboard app instead)",
-                exe.display()
-            )
-            .into());
+            return Ok(Method::Whiteboard(exe));
         }
         if parts
             .windows(2)
@@ -168,20 +189,30 @@ impl Method {
     }
 }
 
+fn managed(exe: &Path) -> String {
+    format!(
+        "{} is likely managed by Whiteboard; skipping automatic deletion for safety (remove via Whiteboard app instead)",
+        exe.display()
+    )
+}
+
 /// `diffr upgrade`: the newest release, the way this diffr was installed,
 /// then each recorded agent's plugin.
 pub(crate) fn upgrade() -> Result<i32> {
     match Method::find()? {
+        Method::Whiteboard(exe) => return Err(managed(&exe).into()),
         Method::Brew => run(Command::new("brew").args(["upgrade", FORMULA]))?,
         Method::Cargo => run(Command::new("cargo").args(["install", "--locked", CRATE]))?,
         Method::Script(dir) => {
             if cfg!(windows) {
                 return Err("diffr upgrade runs install.sh, which supports macOS and Linux".into());
             }
-            let script = host(Command::new("curl").args(["-fsSL", INSTALL_SCRIPT]))?;
+            let script = host(Command::new("curl").args(["-fsSL", INSTALL_SCRIPT]), b"")?;
             let mut sh = Command::new("sh")
                 .arg("-s")
                 .env("DIFFR_INSTALL_DIR", dir)
+                // The agents are upgraded below, without asking again.
+                .env("DIFFR_SKIP_SETUP", "1")
                 .stdin(Stdio::piped())
                 .spawn()
                 .map_err(|error| format!("could not run sh: {error}"))?;
@@ -206,6 +237,9 @@ pub(crate) fn upgrade() -> Result<i32> {
 /// reads it too.
 pub(crate) fn uninstall() -> Result<i32> {
     let method = Method::find()?;
+    if let Method::Whiteboard(exe) = &method {
+        return Err(managed(exe).into());
+    }
     let mut record = Record::load()?;
     while let Some(agent) = record.agents.first().copied() {
         agent.remove(&mut |message| eprintln!("{message}"))?;
@@ -225,6 +259,7 @@ pub(crate) fn uninstall() -> Result<i32> {
             }
             eprintln!("Removed diffr from {}", dir.display());
         }
+        Method::Whiteboard(_) => unreachable!("refused above"),
     }
     Ok(0)
 }
@@ -243,17 +278,45 @@ pub(crate) fn home() -> Result<PathBuf> {
     Ok(dirs::home_dir().ok_or("no home directory for this user")?)
 }
 
-fn claude(args: &[&str]) -> Result<Vec<u8>> {
-    host(Command::new("claude").args(args))
+const CLAUDE_MISSING: &str = "Claude Code's `claude` command is not on your PATH. Install \
+     Claude Code (https://code.claude.com/docs/en/setup), or open a new terminal if you just \
+     did, then run `diffr config init`.";
+
+/// Where `claude` is on PATH, found the way `Command::new("claude")` finds it.
+fn claude_path() -> Option<PathBuf> {
+    let name = format!("claude{}", std::env::consts::EXE_SUFFIX);
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(&name))
+        .find(|path| path.is_file())
 }
 
-/// Run a host command. Its output is kept, so prompts and `--json` stay
-/// clean, and shown only when it fails.
-fn host(command: &mut Command) -> Result<Vec<u8>> {
-    let output = command
-        .stdin(Stdio::null())
-        .output()
+fn claude(args: &[&str]) -> Result<Vec<u8>> {
+    claude_with_input(args, b"")
+}
+
+/// `claude` with `input` on stdin.
+fn claude_with_input(args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
+    let Some(path) = claude_path() else {
+        return Err(CLAUDE_MISSING.into());
+    };
+    host(Command::new(path).args(args), input)
+}
+
+/// Run a host command with `input` on stdin. Its output is kept, so prompts
+/// and `--json` stay clean, and shown only when it fails.
+fn host(command: &mut Command, input: &[u8]) -> Result<Vec<u8>> {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| format!("could not run {}: {error}", describe(command)))?;
+    child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(input)?;
+    let output = child.wait_with_output()?;
     if !output.status.success() {
         return Err(format!(
             "{} failed ({}):\n{}{}",

@@ -25250,7 +25250,8 @@ async function checkVersion($, binary) {
   try {
     shown = await $.process.run([binary, "--version"]);
   } catch (error62) {
-    throw new Error(`${binary} could not run (${error62 instanceof Error ? error62.message : String(error62)}); install diffr with: ${INSTALL}`);
+    const reason = error62 instanceof Error ? error62.message : String(error62);
+    throw new Error(`${binary} could not run (${reason}). If diffr is installed, run \`diffr config init\` in a terminal so this plugin finds it; otherwise install diffr with: ${INSTALL}`);
   }
   if (shown.exitCode !== 0) throw new Error(shown.stderr || `${binary} --version exited with status ${shown.exitCode}`);
   const match = /^diffr (\d+)\.(\d+)\.(\d+)/.exec(shown.stdout);

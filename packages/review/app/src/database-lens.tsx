@@ -53,6 +53,7 @@ import {
 import { withClass } from "./stylex-props";
 import { tokens } from "./tokens.stylex";
 import { captureUiEvent } from "./ui-telemetry";
+import { useDiagramSelection } from "./use-diagram-selection";
 
 type OperationKind = "read" | "write";
 
@@ -105,6 +106,7 @@ export interface ParsedSchemaStop {
   id: string;
   label: string;
   source: DiffSelection;
+  nodeId: string;
   /** Every row of the table, so the whole table lights up. */
   targetKeys: string[];
 }
@@ -234,6 +236,7 @@ export function lensUseCases(block: DatabaseLensProps): ParsedUseCase[] {
         id: `${block.id}:schema:${operation.store}:${operation.collection}`,
         label: `${collection.label} schema`,
         source: anchorSelection(collection.source, block.pins),
+        nodeId: storeCollectionNodeId(target),
         targetKeys: flattenSchemaRows(collection.fields).map((row) =>
           targetKey(target, row.path),
         ),
@@ -448,6 +451,12 @@ export function DatabaseLens(block: DatabaseLensProps) {
     if (nextUseCase) openUseCase(nextUseCase);
   };
 
+  const {
+    anchor: inlineAnchor,
+    selectInline,
+    figureRef,
+  } = useDiagramSelection(activeTour, tourOpen);
+
   const openLensTour = useCallback(
     (anchor?: string) => {
       if (!activeTour) return;
@@ -455,6 +464,8 @@ export function DatabaseLens(block: DatabaseLensProps) {
       if (anchor) {
         captureUiEvent(session, "peek_opened", { via: "db_lens" });
       }
+
+      if (anchor && selectInline(anchor)) return;
 
       const nextAnchor = anchor ?? tourAnchor ?? activeTour.stops[0]?.anchor.id;
 
@@ -473,7 +484,7 @@ export function DatabaseLens(block: DatabaseLensProps) {
           nextAnchor,
         );
     },
-    [activeTour, panelStore, session, tourAnchor, tourOpen],
+    [activeTour, panelStore, session, tourAnchor, tourOpen, selectInline],
   );
 
   const { closeOverlayTour: closeTour, moveOverlayTour: changeTourAnchor } =
@@ -484,6 +495,7 @@ export function DatabaseLens(block: DatabaseLensProps) {
   // database-lens is a marker: document-embed-scroll.ts finds it.
   const renderLensFigure = (stage: boolean) => (
     <figure
+      ref={stage ? undefined : figureRef}
       {...withClass(
         "database-lens",
         styles.figure,
@@ -541,7 +553,7 @@ export function DatabaseLens(block: DatabaseLensProps) {
             navigation={navigation}
             useCase={activeUseCase}
             stores={stores}
-            activeAnchor={stage ? tourAnchor : null}
+            activeAnchor={stage ? tourAnchor : inlineAnchor}
             onOpenAnchor={(anchor) => openLensTour(anchor)}
           />
         ) : (
@@ -733,6 +745,17 @@ function DatabaseC4UseCaseDiagram({
   const handleSelectNode = (node: SoftwareMapNodeSnapshot) => {
     setSelectedNodeId(node.id);
     setViewportFocusNodeId(null);
+
+    const anchor =
+      useCase.schemas?.find((stop) => stop.nodeId === node.id)?.id ??
+      resolvedOperations.find(
+        ({ actor, target }) =>
+          actorNodeId(actor) === node.id ||
+          storeNodeId(target) === node.id ||
+          storeCollectionNodeId(target) === node.id,
+      )?.id;
+
+    if (anchor) onOpenAnchor(anchor);
   };
 
   const handleToggleNodeExpansion = (node: SoftwareMapNodeSnapshot) => {

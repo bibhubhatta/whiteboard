@@ -890,70 +890,6 @@ describe("block components", () => {
     ).toBe("200px");
   });
 
-  it("draws Mermaid in the stage's theme, revealing and lighting its parts by frame", async () => {
-    const { container } = await mountFixture("animation", {
-      document: [
-        {
-          id: "block-1",
-          type: "animation",
-          title: "Mermaid",
-          height: "auto",
-          pins: { repositoryId: "repo", base: "base", head: "head" },
-          frames: [
-            { key: "call", title: "Call" },
-            { key: "write", title: "Write" },
-          ],
-          code: { proof: "head/order.ts#L1" },
-          html: [
-            "<script>",
-            'const d=whiteboard.mermaid("flowchart LR\\n  api[API] e1@--> store[(Store)]");',
-            'd.highlight("call","api").enter("write","store","e1").on("write","store",{tone:"added"});',
-            'const proof=whiteboard.code("proof");proof.style.width="10px";document.body.append(proof);',
-            'const part=(id)=>d.element.querySelector(`.pele-node[data-id="${id}"], .pele-edge[data-id="${id}"]`);',
-            'const probe=document.createElement("span");probe.style.color="var(--wb-surface)";document.body.append(probe);',
-            'whiteboard.on("*",({frame})=>{setTimeout(()=>{const api=part("api"),store=part("store"),edge=part("e1");const shown=(el)=>getComputedStyle(el).visibility==="visible";const themed=getComputedStyle(api.querySelector("rect")).fill===getComputedStyle(probe).color;',
-            'const ok=frame.key==="call"?api.hasAttribute("data-wb-highlit")&&!shown(store)&&!shown(edge)&&store.dataset.tone===undefined:!api.hasAttribute("data-wb-highlit")&&shown(store)&&shown(edge)&&store.dataset.tone==="added";',
-            'proof.style.width=themed&&ok?(frame.key==="call"?"200px":"240px"):"100px"},600)});',
-            "</script>",
-          ].join(""),
-        },
-      ],
-    });
-
-    const width = () =>
-      container.querySelector<HTMLElement>("[data-animation-slot='code']")
-        ?.style.width;
-
-    const step = (label: string) =>
-      act(async () =>
-        container
-          .querySelector<HTMLButtonElement>(`button[aria-label='${label}']`)!
-          .click(),
-      );
-
-    const landed = () =>
-      settled(() =>
-        width() === "100px" || width() === "200px" || width() === "240px"
-          ? width()
-          : undefined,
-      );
-
-    expect(await landed()).toBe("200px");
-    await step("Next frame");
-    expect(
-      await settled(() =>
-        width() === "100px" || width() === "240px" ? width() : undefined,
-      ),
-    ).toBe("240px");
-    await step("Previous frame");
-    expect(
-      await settled(() =>
-        width() === "100px" || width() === "200px" ? width() : undefined,
-      ),
-    ).toBe("200px");
-    expect(container.querySelector("[role='alert']")).toBeNull();
-  });
-
   it("does not report a ResizeObserver that resizes its own target", async () => {
     const { container } = await mountFixture("animation", {
       document: [
@@ -985,29 +921,6 @@ describe("block components", () => {
     expect(container.querySelector("[role='alert']")).toBeNull();
   });
 
-  it("names a Mermaid part the diagram does not have", async () => {
-    const { container } = await mountFixture("animation", {
-      document: [
-        {
-          id: "block-1",
-          type: "animation",
-          title: "Mermaid typo",
-          height: "auto",
-          frames: [{ key: "only", title: "Only" }],
-          code: {},
-          html: '<script>whiteboard.mermaid("flowchart LR\\n  api --> store").enter("only","stor");</script>',
-        },
-      ],
-    });
-
-    expect(
-      await settled(
-        () => container.querySelector("[role='alert']")?.textContent,
-      ),
-    ).toMatch(/The diagram has no part "stor"\. Its parts: .*\bstore\b/);
-  });
-
-  // The stage reports through an error: the host cannot reach into its frame.
   const alertText = (container: HTMLElement) =>
     container.querySelector("[role='alert']")?.textContent ?? "";
 
@@ -1146,6 +1059,8 @@ describe("block components", () => {
   });
 
   it("lets go of a frame's finished animations on the next frame and keeps their end state", async () => {
+    using stages = tapStages();
+
     const { container } = await mountFixture("animation", {
       document: [
         {
@@ -1178,7 +1093,9 @@ describe("block components", () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
     };
 
-    expect(await settled(() => text(container).includes("1 / 4"))).toBe(true);
+    // The count shows before the stage boots: wait for the stage itself, so
+    // frame a's animation has run before stepping on.
+    expect(await settled(() => stages.count("ready") === 1)).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 200));
     await next("2 / 4");
     await next("3 / 4");
@@ -1220,6 +1137,139 @@ describe("block components", () => {
     expect(container.querySelector("[data-animation-slot]")).toBeNull();
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(stages.count("ready")).toBe(1);
+  });
+
+  it("folds a scene into fewer columns before one, and opens columns to fit a row's link labels", async () => {
+    const scene = (box: string) =>
+      `const ${box} = whiteboard.scene({ columns: 4, container: "#${box}" });` +
+      ["a", "b", "c", "d"]
+        .map(
+          (id, i) =>
+            `${box}.actor({ id: "${box}-${id}", at: [${i + 1}, 1], title: "${id}" });`,
+        )
+        .join("") +
+      `${box}.link("${box}-a", "${box}-b", { label: "init + port to the stage" });` +
+      `${box}.peek("status", { at: [1, 2, 1, 4] });`;
+
+    const { container } = await mountFixture("animation", {
+      document: [
+        {
+          id: "block-1",
+          type: "animation",
+          title: "Folds",
+          height: "auto",
+          frames: [{ key: "only", title: "Only" }],
+          code: { status: "head/order.ts#L1" },
+          // Each scene reports its column count and gap through the error line.
+          html:
+            '<div id="narrow" style="width: 760px"></div><div id="wide" style="width: 1400px"></div><script>' +
+            scene("narrow") +
+            scene("wide") +
+            'const report = (id) => { const s = getComputedStyle(document.querySelector(`#${id} .wb-scene`)); return `${id} ${s.gridTemplateColumns.split(" ").length} gap ${parseFloat(s.columnGap) > 48}`; };' +
+            'setTimeout(() => { throw new Error(`${report("narrow")}, ${report("wide")}`); }, 600);' +
+            "</script>",
+          pins: { repositoryId: "repo", base: "base", head: "head" },
+        },
+      ],
+    });
+
+    expect(await settled(() => alertText(container).includes("narrow"))).toBe(
+      true,
+    );
+    expect(alertText(container)).toContain(
+      "narrow 2 gap true, wide 4 gap true",
+    );
+  });
+
+  it("starts on the first scenario and switches the stage's path from the picker", async () => {
+    const { container } = await mountFixture("animation", {
+      document: [
+        {
+          id: "block-1",
+          type: "animation",
+          title: "Branches",
+          height: "auto",
+          frames: [
+            { key: "a", title: "Start", label: "START" },
+            { key: "b", title: "Delivered", label: "DELIVER" },
+            { key: "c", title: "Dropped", label: "DROP" },
+          ],
+          scenarios: [
+            { key: "ok", label: "Delivered", frames: ["a", "b"] },
+            { key: "lost", label: "Dropped packet", frames: ["a", "c"] },
+          ],
+          code: {},
+          // The stage reports the path it was given through its error line.
+          html: '<script>whiteboard.on("*", () => { if (whiteboard.frames.some((f) => f.key === "c")) throw new Error("stage on dropped"); });</script>',
+          pins: { repositoryId: "repo", base: "base", head: "head" },
+        },
+      ],
+    });
+
+    const steps = () =>
+      [...container.querySelectorAll("[aria-label='Steps'] button")].map(
+        (step) => step.textContent,
+      );
+
+    const picker = (name: string) =>
+      [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          "[role='group'][aria-label='Scenario'] button",
+        ),
+      ].find((button) => button.textContent === name)!;
+
+    expect(text(container)).toContain("Scenario");
+    expect(await settled(() => steps().join() === "1START,2DELIVER")).toBe(
+      true,
+    );
+    expect(picker("Delivered").getAttribute("aria-pressed")).toBe("true");
+
+    await act(async () => picker("Dropped packet").click());
+
+    expect(await settled(() => steps().join() === "1START,2DROP")).toBe(true);
+    expect(picker("Dropped packet").getAttribute("aria-pressed")).toBe("true");
+    expect(
+      await settled(() => alertText(container).includes("stage on dropped")),
+    ).toBe(true);
+  });
+
+  it("boots the stage again each time it goes fullscreen and back", async () => {
+    using stages = tapStages();
+
+    const { container } = await mountFixture("animation", {
+      document: [
+        {
+          id: "block-1",
+          type: "animation",
+          title: "Expands",
+          height: "auto",
+          frames: [{ key: "only", title: "Only" }],
+          code: { status: "head/order.ts#L1" },
+          html: '<div data-wb-code="status"></div>',
+          pins: { repositoryId: "repo", base: "base", head: "head" },
+        },
+      ],
+    });
+
+    const slot = () => document.querySelector("[data-animation-slot='code']");
+    expect(await settled(slot)).toBeTruthy();
+
+    for (const [boots, label] of [
+      [2, "Expand animation"],
+      [3, "Close expanded animation"],
+    ] as const) {
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(`button[aria-label='${label}']`)!
+          .click(),
+      );
+      expect(await settled(() => stages.count("ready") === boots)).toBe(true);
+      expect(document.querySelectorAll("iframe")).toHaveLength(1);
+    }
+
+    expect(await settled(slot)).toBeTruthy();
+    expect(alertText(container)).toBe("");
+    expect(document.querySelector("[role='dialog']")).toBeNull();
   });
 
   it("draws the first slots of a stage with too many and says so", async () => {

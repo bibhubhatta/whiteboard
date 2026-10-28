@@ -5,7 +5,6 @@ import type {
   Timeline,
   TimelinePosition,
 } from "animejs";
-import type * as Pele from "pele";
 
 import type {
   HostMessage,
@@ -20,8 +19,6 @@ declare global {
   interface Window {
     /** anime.js, in the animation stage only: its UMD build sets it. */
     anime?: typeof Anime;
-    /** Pele, in a stage whose scripts draw Mermaid: its global build sets it. */
-    pele?: typeof Pele;
   }
 }
 
@@ -192,40 +189,6 @@ export interface TokenOptions {
   only?: string[];
 }
 
-export interface MermaidOptions {
-  /** A selector or element to draw into; defaults to a new element at the
-   * end of document.body. */
-  container?: string | HTMLElement;
-}
-
-/** A Mermaid diagram from whiteboard.mermaid(). Its parts are named by their
- * Mermaid ids: a node's id, a named edge's (`a e1@--> b`), `L_<from>_<to>_<n>`
- * for an unnamed flowchart edge, and a sequence diagram's participants by name
- * and its messages i0, i1, … in order. Each method returns the diagram. */
-export interface MermaidDiagram {
-  readonly element: HTMLElement;
-  /** Every part id in the drawing. */
-  readonly ids: readonly string[];
-  /** Show the parts from this frame on; an edge draws in. */
-  enter(frame: string, ...ids: string[]): MermaidDiagram;
-  /** Hide the parts from this frame on. */
-  exit(frame: string, ...ids: string[]): MermaidDiagram;
-  /** Show the parts only in these frames. */
-  only(frames: string | readonly string[], ...ids: string[]): MermaidDiagram;
-  /** Ring the parts in these frames. */
-  highlight(
-    frames: string | readonly string[],
-    ...ids: string[]
-  ): MermaidDiagram;
-  /** Give the parts a tone from this frame on, until a later frame changes
-   * it; "none" clears it. */
-  on(
-    frame: string,
-    ids: string | readonly string[],
-    change: { tone: Tone | "none" },
-  ): MermaidDiagram;
-}
-
 /** One frame's part of the stage timeline. Numeric positions count from the
  * frame's start; strings are anime.js positions. */
 export interface FrameTimeline {
@@ -277,9 +240,8 @@ export interface WhiteboardShim {
   /** A grid of cards, edges and chips with consistent spacing and routing.
    * Prefer it to arrow/token for request-flow and state diagrams. */
   scene(options?: SceneOptions): Scene;
-  /** A Mermaid diagram, laid out for you and drawn in the stage's theme,
-   * whose parts enter, leave, light up and take tones by frame. */
-  mermaid(text: string, options?: MermaidOptions): MermaidDiagram;
+  /** Removed. Throws, so a stage written for it says how to rebuild. */
+  mermaid(...args: unknown[]): never;
   /** The frame's segment of the stage timeline: it plays when the reader
    * steps into the frame, and lands at its end on a jump. */
   timeline(key: string): FrameTimeline;
@@ -317,9 +279,8 @@ export function stageRuntime(port: MessagePort): void {
     post({ type: "error", message: message.slice(0, 2000) });
 
   addEventListener("error", (event) => {
-    // A ResizeObserver whose callback resizes what it watches, as Pele's
-    // does when it draws a diagram again, gets the rest next frame. Chromium
-    // reports that as an error, but nothing failed.
+    // A ResizeObserver whose callback resizes what it watches gets the rest
+    // next frame. Chromium reports that as an error, but nothing failed.
     if (event.message.startsWith("ResizeObserver loop")) return;
     fail(event.message);
   });
@@ -571,52 +532,13 @@ body {
 .wb-scene { display: grid; gap: var(--wb-space-28) var(--wb-space-48); padding: var(--wb-space-24); align-items: start; justify-items: stretch; min-width: 0; }
 .wb-scene-compact { grid-template-columns: minmax(0, 1fr) !important; row-gap: var(--wb-space-48); }
 .wb-scene-compact > * { grid-column: 1 / -1 !important; grid-row: auto !important; }
+.wb-scene-fold { grid-template-columns: repeat(var(--wb-fold), minmax(0, 1fr)) !important; }
+.wb-scene-fold > * { grid-column: auto !important; grid-row: auto !important; }
+.wb-scene-fold > [data-wb-wide] { grid-column: 1 / -1 !important; }
 .wb-scene > [data-wb-state="before"], .wb-scene > [data-wb-state="after"],
 .wb-items > [data-wb-state="before"], .wb-items > [data-wb-state="after"],
 .wb-table tr[data-wb-state="before"], .wb-table tr[data-wb-state="after"] { display: none; }
 .wb-scene-top { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--wb-space-8); margin-bottom: var(--wb-space-4); }
-/* Mermaid, drawn by Pele in the stage's theme. A shape is a node's own
-   outline; an edge's line is drawn in by its dash offset, as an arrow is. */
-.wb-mermaid {
-  display: block;
-  padding: var(--wb-space-20) var(--wb-space-24);
-  --pele-bg: var(--wb-surface);
-  --pele-fg: var(--wb-ink);
-  --pele-muted: var(--wb-ink-muted);
-  --pele-line: var(--wb-ink-faint);
-  --pele-surface: var(--wb-surface);
-  --pele-surface-alt: var(--wb-well);
-  --pele-border: var(--wb-rule);
-  --pele-accent: var(--wb-accent);
-  --pele-font: var(--wb-font-mono);
-  --pele-font-mono: var(--wb-font-code);
-  --pele-radius: var(--wb-radius-surface);
-  --pele-series-1: var(--wb-accent);
-  --pele-series-2: var(--wb-added);
-  --pele-series-3: var(--wb-modified);
-  --pele-series-4: var(--wb-removed);
-}
-.wb-mermaid .pele-node > :is(rect, path, polygon, circle, ellipse) { transition: fill var(--wb-duration) ease, stroke var(--wb-duration) ease; }
-.wb-mermaid .pele-edge > path { transition: stroke var(--wb-duration) ease, fill var(--wb-duration) ease, stroke-dashoffset var(--wb-duration) ease; }
-.wb-mermaid .wb-draw { stroke-dasharray: var(--wb-length) var(--wb-length); }
-.wb-mermaid .pele-edge[data-wb-state="before"] > .wb-draw { stroke-dashoffset: var(--wb-length); }
-.wb-mermaid .pele-node[data-tone="accent"] > :is(rect, path, polygon, circle, ellipse) { stroke: var(--wb-accent); }
-.wb-mermaid .pele-node[data-tone="added"] > :is(rect, path, polygon, circle, ellipse) { fill: var(--wb-added-bg); stroke: var(--wb-added); }
-.wb-mermaid .pele-node[data-tone="removed"] > :is(rect, path, polygon, circle, ellipse) { fill: var(--wb-removed-bg); stroke: var(--wb-removed); }
-.wb-mermaid .pele-node[data-tone="modified"] > :is(rect, path, polygon, circle, ellipse) { fill: var(--wb-modified-bg); stroke: var(--wb-modified); }
-.wb-mermaid .pele-node[data-tone="muted"] { color: var(--wb-ink-muted); }
-.wb-mermaid .pele-node[data-tone="muted"] > :is(rect, path, polygon, circle, ellipse) { stroke-dasharray: 4 3; }
-.wb-mermaid .pele-node[data-wb-highlit] > :is(rect, path, polygon, circle, ellipse) { stroke: var(--wb-accent); stroke-width: 2; }
-.wb-mermaid .pele-edge[data-tone="accent"] > path:not(.pele-marker), .wb-mermaid .pele-edge[data-wb-highlit] > path:not(.pele-marker) { stroke: var(--wb-accent); }
-.wb-mermaid .pele-edge[data-tone="accent"] > .pele-marker, .wb-mermaid .pele-edge[data-wb-highlit] > .pele-marker { fill: var(--wb-accent); }
-.wb-mermaid .pele-edge[data-wb-highlit] > path:not(.pele-marker) { stroke-width: 2.5; }
-.wb-mermaid .pele-edge[data-tone="added"] > path:not(.pele-marker) { stroke: var(--wb-added); }
-.wb-mermaid .pele-edge[data-tone="added"] > .pele-marker { fill: var(--wb-added); }
-.wb-mermaid .pele-edge[data-tone="removed"] > path:not(.pele-marker) { stroke: var(--wb-removed); }
-.wb-mermaid .pele-edge[data-tone="removed"] > .pele-marker { fill: var(--wb-removed); }
-.wb-mermaid .pele-edge[data-tone="modified"] > path:not(.pele-marker) { stroke: var(--wb-modified); }
-.wb-mermaid .pele-edge[data-tone="modified"] > .pele-marker { fill: var(--wb-modified); }
-.wb-mermaid .pele-edge[data-tone="muted"] > path:not(.pele-marker) { stroke-dasharray: 4 3; }
 :root[data-wb-instant] *, :root[data-wb-instant] *::before, :root[data-wb-instant] *::after {
   transition: none !important;
   animation-duration: 0s !important;
@@ -1888,34 +1810,81 @@ body {
       grid,
     );
 
-    if (options.responsive !== false && columns > 1) {
-      // Preserve declared cells on wider layouts. In a narrow container, use
-      // reading order rather than shrinking cards, tables and labels to fit.
-      const reflow = () => {
-        const style = getComputedStyle(grid);
+    // Labels of links between cards in one row: the columns open up to fit
+    // the widest, so it sits between its cards rather than off its line.
+    const rowLabels = new Set<string>();
 
-        const padding =
-          parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    const sizeGap = () => {
+      if (!rowLabels.size) return;
+      const probe = document.createElement("span");
+      probe.className = "wb-label";
+      probe.style.cssText =
+        "position: absolute; visibility: hidden; white-space: nowrap";
+      grid.append(probe);
+      let widest = 0;
 
-        const gap = parseFloat(style.columnGap);
-        grid.classList.toggle(
-          "wb-scene-compact",
-          grid.clientWidth < columns * 140 + (columns - 1) * gap + padding,
-        );
-      };
+      for (const label of rowLabels) {
+        probe.textContent = label;
+        widest = Math.max(widest, probe.getBoundingClientRect().width);
+      }
 
-      let layoutFrame: number | undefined;
-      new ResizeObserver(() => {
-        wake();
+      probe.remove();
+      grid.style.columnGap = `${Math.min(160, Math.max(48, Math.ceil(widest) + 16))}px`;
+    };
 
-        if (layoutFrame !== undefined) return;
-        layoutFrame = requestAnimationFrame(() => {
-          layoutFrame = undefined;
-          reflow();
-        });
-      }).observe(grid);
-      reflow();
-    }
+    const responsive = options.responsive !== false && columns > 1;
+
+    // Preserve declared cells on wider layouts. In a narrower container, fold
+    // into fewer columns in reading order, and below that into one, rather
+    // than shrinking cards, tables and labels to fit.
+    const reflow = () => {
+      sizeGap();
+
+      if (!responsive) return;
+      const style = getComputedStyle(grid);
+
+      const padding =
+        parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+
+      const gap = parseFloat(style.columnGap);
+
+      const fits = (count: number) =>
+        grid.clientWidth >= count * 140 + (count - 1) * gap + padding;
+
+      let shown = columns;
+
+      if (!fits(columns)) {
+        shown = 1;
+
+        // An even fold, or two columns: four cards fold to two rows of two,
+        // not three and one.
+        for (let count = columns - 1; count >= 2; count--)
+          if ((columns % count === 0 || count === 2) && fits(count)) {
+            shown = count;
+            break;
+          }
+      }
+
+      grid.classList.toggle("wb-scene-compact", shown === 1);
+      grid.classList.toggle("wb-scene-fold", shown > 1 && shown < columns);
+      grid.style.setProperty("--wb-fold", String(shown));
+    };
+
+    let layoutFrame: number | undefined;
+
+    const scheduleLayout = () => {
+      if (layoutFrame !== undefined) return;
+      layoutFrame = requestAnimationFrame(() => {
+        layoutFrame = undefined;
+        reflow();
+      });
+    };
+
+    new ResizeObserver(() => {
+      wake();
+      scheduleLayout();
+    }).observe(grid);
+    reflow();
 
     const nodes = new Map<string, HTMLElement>();
     const links = new Map<string, ArrowRecord>();
@@ -1967,10 +1936,15 @@ body {
       }
     });
 
+    const rows = new Map<HTMLElement, number>();
+
     const place = (el: HTMLElement, [column, row, rowSpan, colSpan]: Cell) => {
       el.style.gridColumn = colSpan
         ? `${column} / span ${colSpan}`
         : String(column);
+      // Folded into fewer columns, a cell that spans columns takes the row.
+      el.toggleAttribute("data-wb-wide", (colSpan ?? 1) > 1);
+      rows.set(el, row);
       el.style.gridRow = rowSpan ? `${row} / span ${rowSpan}` : String(row);
       el.style.order = String((row - 1) * columns + column);
     };
@@ -2037,6 +2011,11 @@ body {
       const offset = n === 0 ? 0 : (n % 2 ? 1 : -1) * Math.ceil(n / 2) * 9;
       const record = createEdge(a, b, { ...options, offset });
       links.set(`${ak}>${bk}`, record);
+
+      if (options.label && rows.has(a) && rows.get(a) === rows.get(b)) {
+        rowLabels.add(options.label);
+        scheduleLayout();
+      }
 
       return record;
     };
@@ -2164,175 +2143,6 @@ body {
     };
   };
 
-  // Pele lays the diagram out and draws it again when its width or fonts
-  // change, so the frame attributes go back on after every drawing.
-  const mermaid = (text: string, options: MermaidOptions): MermaidDiagram => {
-    const pele = window.pele;
-
-    if (!pele)
-      throw new Error(
-        "whiteboard.mermaid(): Pele did not load. The stage loads it when the block's html calls .mermaid(.",
-      );
-
-    const element = document.createElement("div");
-    element.className = "wb-mermaid";
-    (options.container ? resolve(options.container) : document.body).append(
-      element,
-    );
-
-    type Mark = "enter" | "exit" | "only" | "highlight";
-
-    const marks = new Map<string, Map<Mark, string>>();
-    const tones = new Map<string, { at: number; tone: Tone | "none" }[]>();
-
-    const parts = (id: string) =>
-      element.querySelectorAll<SVGElement>(`svg [data-id="${CSS.escape(id)}"]`);
-
-    const ids = () => [
-      ...new Set(
-        [...element.querySelectorAll<SVGElement>("svg [data-id]")].map(
-          (part) => part.dataset.id!,
-        ),
-      ),
-    ];
-
-    const decorate = () => {
-      for (const [id, set] of marks)
-        for (const part of parts(id))
-          for (const [name, value] of set) part.dataset[name] = value;
-
-      // A solid edge that enters draws in along its length; a dashed one
-      // keeps its dashes and fades.
-      element
-        .querySelectorAll<SVGPathElement>(
-          ":is(.pele-edge[data-enter], .pele-edge[data-only]) > path:not(.pele-marker):not([stroke-dasharray])",
-        )
-        .forEach((path) => {
-          path.classList.add("wb-draw");
-          path.style.setProperty("--wb-length", String(path.getTotalLength()));
-        });
-    };
-
-    sceneAppliers.push((key) => {
-      const position = activeFrameIndex(key);
-
-      for (const [id, changes] of tones) {
-        let tone: Tone | "none" = "none";
-
-        for (const change of changes) {
-          const changeKey = init?.frames[change.at]?.key;
-          const changePosition = changeKey ? activeFrameIndex(changeKey) : -1;
-
-          if (changePosition >= 0 && changePosition <= position)
-            tone = change.tone;
-        }
-
-        for (const part of parts(id))
-          if (tone === "none") delete part.dataset.tone;
-          else part.dataset.tone = tone;
-      }
-    });
-
-    pele.mount(element, text, {
-      fontSize:
-        parseFloat(getComputedStyle(root).getPropertyValue("--wb-text-body")) ||
-        undefined,
-      links: false,
-      zoom: false,
-      onRender: () => {
-        decorate();
-
-        if (current >= 0) applyStates();
-      },
-      onError: (error) =>
-        fail(
-          `whiteboard.mermaid(): ${error instanceof Error ? error.message : String(error)}`,
-        ),
-    });
-
-    const check = (
-      method: string,
-      frames: readonly string[],
-      list: readonly string[],
-    ) => {
-      for (const frame of frames)
-        if (frameIndex(frame) < 0) throw new Error(`Unknown frame "${frame}".`);
-
-      if (!list.length)
-        throw new Error(`mermaid.${method}() needs at least one part id.`);
-
-      // Text that failed to draw has no parts; onError has said why.
-      if (!element.querySelector("svg")) return;
-      const known = ids();
-
-      for (const id of list)
-        if (!known.includes(id))
-          throw new Error(
-            `The diagram has no part "${id}". Its parts: ${known.join(", ")}.`,
-          );
-    };
-
-    const framesOf = (frames: string | readonly string[]) => [frames].flat();
-
-    const mark = (name: Mark, frames: string[], list: string[]) => {
-      check(name, frames, list);
-
-      for (const id of list) {
-        let set = marks.get(id);
-
-        if (!set) marks.set(id, (set = new Map()));
-
-        const value =
-          name === "highlight"
-            ? [...new Set([...(set.get(name)?.split(" ") ?? []), ...frames])]
-            : frames;
-
-        set.set(name, value.join(" "));
-      }
-
-      decorate();
-
-      if (current >= 0) applyStates();
-
-      return diagram;
-    };
-
-    const diagram: MermaidDiagram = {
-      element,
-      get ids() {
-        return ids();
-      },
-      enter: (frame, ...list) => mark("enter", [frame], list),
-      exit: (frame, ...list) => mark("exit", [frame], list),
-      only: (frames, ...list) => mark("only", framesOf(frames), list),
-      highlight: (frames, ...list) => mark("highlight", framesOf(frames), list),
-      on(frame, list, change) {
-        for (const key of Object.keys(change))
-          if (key !== "tone")
-            throw new Error(
-              `mermaid.on(): no change field "${key}" — use { tone }.`,
-            );
-
-        const targets = framesOf(list);
-        check("on", [frame], targets);
-
-        for (const id of targets) {
-          let changes = tones.get(id);
-
-          if (!changes) tones.set(id, (changes = []));
-          changes.push({ at: frameIndex(frame), tone: change.tone });
-          changes.sort((a, b) => a.at - b.at);
-        }
-
-        if (current >= 0) applyStates();
-
-        return diagram;
-      },
-    };
-
-    return diagram;
-  };
-
   const whiteboard: WhiteboardShim = {
     get frames() {
       return activeFrames();
@@ -2451,7 +2261,11 @@ body {
       travelAlong(resolve(token), record, frame, options);
     },
     scene: (options = {}) => scene(options),
-    mermaid: (text, options = {}) => mermaid(text, options),
+    mermaid: () => {
+      throw new Error(
+        "whiteboard.mermaid() was removed from animations. Rebuild the diagram as a whiteboard.scene, or show the whole graph in a flow_diagram block.",
+      );
+    },
   };
 
   Object.defineProperty(window, "whiteboard", { value: whiteboard });
@@ -2662,6 +2476,11 @@ body {
 
   const start = async (message: StageInit) => {
     init = message;
+
+    // The scenario the reader picked, before the stage's scripts run; a
+    // script's own setSequence() still replaces it.
+    if (message.sequence) activeSequence = [...message.sequence];
+
     root.toggleAttribute("data-wb-auto-size", message.autoSize);
     setProperties(message.scale);
     applyTheme(message.theme, message.colorScheme);
@@ -2734,6 +2553,17 @@ body {
         wake();
         break;
       }
+
+      case "sequence":
+        if (!init) break;
+
+        try {
+          whiteboard.setSequence(message.keys);
+        } catch (error) {
+          fail(String(error));
+        }
+
+        break;
     }
   };
 }

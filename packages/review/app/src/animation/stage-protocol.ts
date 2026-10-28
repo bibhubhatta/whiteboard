@@ -34,8 +34,9 @@ export interface StageInit {
   fonts: string;
   reducedMotion: boolean;
   frame: number;
-  /** Library sources the stage runs before its own scripts: anime.js, and
-   * Pele when the stage draws Mermaid. */
+  /** The scenario the reader picked: the frame keys the stage starts on. */
+  sequence?: string[];
+  /** Library sources the stage runs before its own scripts: anime.js. */
   libraries: string[];
 }
 
@@ -54,7 +55,9 @@ export type HostMessage =
       colorScheme: StageColorScheme;
     }
   /** The height the host's content in a slot takes. */
-  | { type: "slot-size"; slot: string; height: number };
+  | { type: "slot-size"; slot: string; height: number }
+  /** The reader picked a scenario: play these frame keys, in order. */
+  | { type: "sequence"; keys: string[] };
 
 /** The tallest an auto-sized stage may report itself. */
 export const STAGE_MAX_HEIGHT = 4000;

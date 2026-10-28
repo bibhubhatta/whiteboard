@@ -7,10 +7,9 @@ Choose where to start by what changes between the frames:
 | Build with | When the frames show |
 | --- | --- |
 | The scene (`whiteboard.scene`) | Up to about 8 cards whose notes, text and tones change, with chips moving along their edges. This is the default. |
-| Mermaid (`whiteboard.mermaid`) | A larger diagram, or one with branches or subgroups, whose nodes and edges appear, leave or light up. Its labels stay fixed: use the scene if they must change. |
 | The toolkit, style kit and raw HTML | Anything else: a chart, a timeline, a queue, a custom shape, or motion the scene cannot express (`arrow`, `token`, `travel`, `timeline`). |
 
-If no part of the drawing changes between frames, it is not an animation: use a `sequence` or `flow_diagram` block, whose steps and nodes link to code. The three mix: a stage can hold a scene, a Mermaid diagram and your own HTML together.
+If no part of the drawing changes between frames, it is not an animation: use a `sequence` or `flow_diagram` block, whose steps and nodes link to code. For a larger graph, animate only the part that changes as a scene, and put the whole graph in a `flow_diagram` beside it. The two mix: a stage can hold a scene and your own HTML together.
 
 ## The component
 
@@ -39,7 +38,8 @@ If no part of the drawing changes between frames, it is not an animation: use a 
 }
 ```
 
-- `frames`: every possible step. `key` names the frame for your markup and scripts; `title` and `caption` show under the stage. `label` is a short step name (e.g. `SEND`); give every frame one, or none, and the reader gets a named step strip instead of dots. `duration` (ms, default 3000) is how long the frame holds while playing. For a flow with alternate branches, declare every stable frame here and select the active ordered path with `whiteboard.setSequence(...)`.
+- `frames`: every possible step. `key` names the frame for your markup and scripts; `title` and `caption` show under the stage. `label` is a short step name (e.g. `SEND`); give every frame one, or none, and the reader gets a named step strip instead of dots. `duration` (ms, default 3000) is how long the frame holds while playing. For a flow with alternate paths, declare every frame here and list the paths in `scenarios`.
+- `scenarios`: alternate paths through the frames, 2 to 8, each `{ "key", "label", "frames": [frame keys in order] }`. The whiteboard draws a picker labelled Scenario above the stage and starts on the first. `label` is what the reader picks, e.g. `Retried request`. Omit it for an animation with one path.
 - `code`: the source ranges the stage shows, by name. The server checks each anchor like any other reference, so verify paths and lines. Use `head/` for the new code and `base/` for the old.
 - `pins`: as on any block that quotes code. A review with a target lends its own; a board without one needs them on the block.
 - `html`: the stage's body. It runs in a sandboxed frame with no network: inline `<style>` and `<script>` only, no external URLs. Images must be `data:` URLs.
@@ -104,11 +104,11 @@ If no part of the drawing changes between frames, it is not an animation: use a 
 
 A scene appends to the stage body by default. To compose it with your own headings, text or controls, pass a container selector or element: `whiteboard.scene({ columns: 3, container: "#diagram" })`. Badges stay with that container too.
 
-When the container is too narrow for readable cards, the scene stacks its cells in row/column order. Widening restores the declared grid. Tables wrap their content. Hidden cards, store items and table rows take no space, so auto height follows visible content. Use `responsive: false` for an intentional fixed grid with your own responsive or scrolling plan.
+When the container is too narrow for the declared columns, the scene folds into fewer, in row/column order: four columns become two rows of two, and a cell spanning columns takes a whole row. Narrower still, it stacks into one column. Widening restores the declared grid. Tables wrap their content. Hidden cards, store items and table rows take no space, so auto height follows visible content. Use `responsive: false` for an intentional fixed grid with your own responsive or scrolling plan.
 
 The scene keeps three things consistent for you:
 
-- **Spacing.** Cards sit in grid cells with a fixed gap. You choose the cell; the scene sets the gap and the padding. Four cards fit a sufficiently wide row; narrower containers stack them. Past four, prefer a second row.
+- **Spacing.** Cards sit in grid cells. You choose the cell; the scene sets the padding and the gap, widening the gap between columns to fit the longest label on a link within a row. At the default document width, three cards with short link labels fit a row; a fourth folds the row in two until the reader widens the document or goes fullscreen. Past four, prefer a second row.
 - **Edges.** `link` draws one straight line from the center of one card's nearest side to the other's, with one weight and one arrowhead. `dashed: true` means async (a reply, a stream, a background send). A second edge between the same two cards offsets beside the first.
 - **Moving blocks.** `send` is the only way to move a block along an edge. The chip rides the edge's line at one fixed speed, so a longer edge takes longer, and every chip moves at the same pace. It fades out on arrival unless you pass `stay: true`.
 
@@ -154,58 +154,7 @@ table.row(cells: string[], { enter?; exit?; only?; tone? }): HTMLTableRowElement
 
 ### Frames
 
-The stage sets `data-frame="<key>"` on `<html>`, and `enter` / `exit` / `only` on any scene part decide the frames it shows in. They are states, not events, so they land right when the reader jumps to a frame or steps back. With `setSequence`, `enter` / `exit` and held `scene.on` changes follow active-sequence order, not declaration order: a change whose key is outside the active path does not apply, an inactive `enter` never occurs, and an inactive `exit` does not end an already-entered part. `only` and highlight lists always match exact stable keys. Visible cards keep their declared wide-grid cells. Hidden cards, store items and table rows collapse from layout; put replacing cards in the same cell. For an intentionally stable footprint, give the container a min-height or choose a fixed stage height with an appropriate scrolling plan.
-
-## Draw with Mermaid
-
-`whiteboard.mermaid(text)` draws a Mermaid diagram in the stage's theme, lays it out for you, and shows its parts frame by frame. Use it when the frames change a diagram too large to place card by card: a pipeline whose stages light up in turn, a state machine stepping through its states, a graph that grows as a request spreads. Use the scene when a few cards carry chips along their edges; Mermaid has no `send`.
-
-Mermaid nodes do not link to code. A diagram that stays the same in every frame belongs in a `flow_diagram` or `sequence` block, not in an animation.
-
-```html
-<script>
-  const d = whiteboard.mermaid(`flowchart LR
-    agent[Agent] e1@-->|call| api(Review API)
-    api e2@-->|edit op| store[(Store)]
-    store e3@-.->|snapshot| canvas[Canvas]`);
-
-  d.highlight("call", "agent", "e1")
-    .enter("write", "store", "e2")
-    .on("write", "store", { tone: "modified" })
-    .enter("watch", "canvas", "e3")
-    .on("watch", "canvas", { tone: "added" });
-</script>
-```
-
-Name a part by its Mermaid id:
-
-- A node by its id: `api` above.
-- An edge by the id you give it with `@`: `a e1@--> b`. Name every edge you will reveal or light up. An unnamed flowchart edge is `L_<from>_<to>_<n>`, counting from 0.
-- In a sequence diagram, a participant by its name, and a message as `i0`, `i1`, … in the order they appear.
-
-`d.ids` lists every part in the drawing, and a call naming a part the drawing lacks throws with that list.
-
-```ts
-whiteboard.mermaid(text: string, options?: { container?: string | Element }): MermaidDiagram;
-
-interface MermaidDiagram {
-  readonly element: HTMLElement;     // the diagram's box
-  readonly ids: readonly string[];
-  enter(frame: string, ...ids: string[]): MermaidDiagram;   // show from this frame on
-  exit(frame: string, ...ids: string[]): MermaidDiagram;    // hide from this frame on
-  only(frames: string | string[], ...ids: string[]): MermaidDiagram;
-  highlight(frames: string | string[], ...ids: string[]): MermaidDiagram;   // ring during these frames
-  on(frame: string, ids: string | string[], change: { tone: Tone | "none" }): MermaidDiagram;
-}
-```
-
-- The whole diagram is laid out once, from its full text, and parts that have not entered keep their place. Nothing moves as parts appear, so write the text for the last frame and reveal it frame by frame.
-- `enter`, `exit`, `only` and `highlight` follow the same rules as on scene parts, active sequences included. A solid edge draws in along its line as it enters; a dashed one fades in. An edge's label shows and hides with it.
-- `on` gives nodes and edges a tone from that frame on, as `scene.on` does; `"none"` clears it.
-- The diagram follows the stage's colors, faces and theme. Leave out Mermaid's `style`, `classDef` and `%%{init}%%` theming: they fix colors that do not follow light and dark. Use tones instead. Links and `click` actions do nothing in the stage.
-- The diagram fits its box's width and draws again when that width changes. A diagram that runs across and does not fit a narrow box is drawn running down instead of shrunk, so a `flowchart LR` may show top to bottom in the document column. Your frame changes carry over to the new drawing, but an element you hold from `d.element` does not: look parts up again inside a frame handler.
-- Any Mermaid diagram type draws. Highlights and tones color nodes and edges. Flowchart and sequence diagrams name their parts as above. State, class and ER diagrams name nodes by their ids too, but make up their own edge ids, such as `edge0`; read them from `d.ids`.
-- Text Mermaid cannot parse shows its error under the stage.
+The stage sets `data-frame="<key>"` on `<html>`, and `enter` / `exit` / `only` on any scene part decide the frames it shows in. They are states, not events, so they land right when the reader jumps to a frame or steps back. With an active path (a scenario, or `setSequence`), `enter` / `exit` and held `scene.on` changes follow active-path order, not declaration order: a change whose key is outside the active path does not apply, an inactive `enter` never occurs, and an inactive `exit` does not end an already-entered part. `only` and highlight lists always match exact stable keys. Visible cards keep their declared wide-grid cells. Hidden cards, store items and table rows collapse from layout; put replacing cards in the same cell. For an intentionally stable footprint, give the container a min-height or choose a fixed stage height with an appropriate scrolling plan.
 
 ## Going further: the toolkit
 
@@ -300,18 +249,18 @@ readonly theme; readonly colorScheme: "light" | "dark"; readonly reducedMotion;
 
 `whiteboard.frame` is the current frame object, not its key. For keyed state, read `whiteboard.frame.key` or use the handler argument: `whiteboard.on("*", ({ frame }) => render(frame.key))`.
 
-For alternate paths, call `whiteboard.setSequence(["start", "branch-a", "done"])`. Every key must be a unique frame declared in the component. Repeating the same sequence is a no-op, so it is safe to call from a render path. The selected order controls the host step labels, titles, count, Previous/Next, keyboard navigation, Play/Replay, and `whiteboard.next()` / `prev()`; changing it stops current playback and clears its hold timer. Changing the sequence preserves the current frame when it remains in the new path; otherwise it lands instantly on the new path's first frame. `whiteboard.frames` contains the active ordered path and its `index` values, and `whiteboard.frame.index` is the current active-path position; keys remain the stable identity. `goto(key)` accepts only a frame in the active sequence and is a direct jump, while adjacent forward steps still play the destination frame's motion even when declaration indexes move backward. Call `setSequence` before `goto` when a control switches branches:
+For alternate paths, declare `scenarios` on the component rather than drawing your own buttons in the stage: the reader gets a labelled picker that works the same on every whiteboard.
 
-```js
-const delivered = ["push", "gossip", "replicate", "serve"];
-const dropped = ["push", "gossip-dropped", "catch-up", "serve-recovered"];
-
-function selectPath(drop) {
-  const path = drop ? dropped : delivered;
-  whiteboard.setSequence(path);
-  whiteboard.goto(path[1]);
-}
+```json
+"scenarios": [
+  { "key": "delivered", "label": "Delivered", "frames": ["push", "gossip", "replicate", "serve"] },
+  { "key": "dropped", "label": "Dropped packet", "frames": ["push", "gossip-dropped", "catch-up", "serve-recovered"] }
+]
 ```
+
+Picking a scenario selects its frames as the active path. The active path controls the host step labels, titles, count, Previous/Next, keyboard navigation, Play/Replay, and `whiteboard.next()` / `prev()`; changing it stops current playback and clears its hold timer. It preserves the current frame when that frame is in the new path; otherwise it lands instantly on the new path's first frame. `whiteboard.frames` contains the active ordered path and its `index` values, and `whiteboard.frame.index` is the current active-path position; keys remain the stable identity. `goto(key)` accepts only a frame in the active path and is a direct jump, while adjacent forward steps still play the destination frame's motion even when declaration indexes move backward.
+
+`whiteboard.setSequence(keys)` selects a path from a script, for a branch the drawing itself decides. Every key must be a unique declared frame, and repeating the same sequence is a no-op, so it is safe to call from a render path. When the path matches a scenario, the picker shows that scenario.
 
 - `scene.peek(name, ...)`, `whiteboard.code(name)` and `<div data-wb-code="name">` all draw the real code peek over a placeholder. Give `scene.peek` a cell, and span columns (the cell's `colSpan`) when the code needs width — a one-column peek clips long lines; a raw `data-wb-code` div takes a CSS width instead. Its height follows the code, up to about 18 lines. A peek is always on top of your drawing, so do not draw or travel over it.
 - A code peek is about 40px of header plus 18px per line, up to about 400px. Rows of cards take about 90px each. With the default `height: "auto"`, the stage grows to fit them. If you intentionally use a numeric fixed height, leave enough room because overflow clips at that height.
@@ -340,6 +289,7 @@ Custom CSS should use the whiteboard's variables, never literal colors, sizes or
 - Each frame shows one idea; its title says what changed. 3 to 8 frames is usual.
 - Omit `height` unless the animation intentionally needs a fixed viewport; verify any numeric height in every frame and narrow layout.
 - Every frame reads correctly when reached by a jump, not only by playing.
-- Build as "Choose how to build it" says: a scene by default, Mermaid for a larger or branching diagram, and the toolkit or raw HTML for anything else.
+- Alternate paths are `scenarios` on the component, not buttons drawn in the stage.
+- Build as "Choose how to build it" says: a scene by default, and the toolkit or raw HTML for anything else.
 - In raw HTML, build from the style kit and the `--wb-*` variables; write no literal color, size or font name.
 - Script errors show under the stage. After writing, read the whiteboard back and fix any.

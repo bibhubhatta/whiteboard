@@ -1,16 +1,14 @@
 import { type JsonValue, isJsonObject } from "@dev.fast/json";
 import {
+  activityBeginSchema,
+  activityEndSchema,
+  activityUpdateSchema,
   pathTargetSchema,
   publishedEdits,
 } from "@dev.fast/whiteboard-document";
 import { z } from "zod";
 
-import {
-  activityBeginSchema,
-  activityEndSchema,
-  activityUpdateSchema,
-} from "./activity.js";
-import { instructionsQuerySchema } from "./instructions.js";
+import { desktopBlockTypes, instructionsQuerySchema } from "./instructions.js";
 import { uploadSchema } from "./local-data.js";
 import { inspectQuerySchema } from "./read-schemas.js";
 import { REVIEW_STATUS_TOOL } from "./status-tool.js";
@@ -158,7 +156,9 @@ export function authoringTools(
             open: z.boolean().optional(),
           }),
           ...(type === "set_target" && { target: pathTargetSchema }),
-          ...(type === "edit" && { edit: publishedEdits(animationsEnabled) }),
+          ...(type === "edit" && {
+            edit: publishedEdits(desktopBlockTypes(animationsEnabled)),
+          }),
         }),
         "POST",
         "/commands",

@@ -1,11 +1,15 @@
-//! Agent sign-ins used in place of an API key. They are never refreshed, so
-//! the agent's own session is untouched.
+//! Agent sign-ins used in place of an API key. The agent refreshes them
+//! itself, so its own session is untouched.
 use base64::Engine;
 use serde_json::{json, Map, Value};
 use std::{
-    path::PathBuf,
+    io::{BufRead, BufReader, Write},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+const REFRESH_MARGIN_MS: u64 = 5 * 60 * 1000;
 
 pub(crate) const LOGINS: [&str; 1] = ["codex"];
 
@@ -75,7 +79,20 @@ fn codex() -> Result<String, String> {
     let path = home("CODEX_HOME", ".codex")
         .ok_or("no home directory for this user")?
         .join("auth.json");
-    let saved = std::fs::read_to_string(&path).map_err(|_| {
+    let token = codex_token(&path)?;
+    if expiry_ms(&token).is_none_or(|at| at > now_ms() + REFRESH_MARGIN_MS) {
+        return Ok(token);
+    }
+    refresh_codex();
+    let token = codex_token(&path)?;
+    if expiry_ms(&token).is_some_and(|at| at <= now_ms()) {
+        return Err("the Codex sign-in expired: run `codex login`, and keep `codex` on PATH so diffr can renew it".into());
+    }
+    Ok(token)
+}
+
+fn codex_token(path: &Path) -> Result<String, String> {
+    let saved = std::fs::read_to_string(path).map_err(|_| {
         format!(
             "no Codex sign-in found in {}: run `codex login`, with cli_auth_credentials_store = \"file\" if Codex keeps it in the system keyring",
             path.display()
@@ -83,13 +100,35 @@ fn codex() -> Result<String, String> {
     })?;
     let saved: Value =
         serde_json::from_str(&saved).map_err(|_| "the Codex sign-in is unreadable")?;
-    let token = saved["tokens"]["access_token"]
+    saved["tokens"]["access_token"]
         .as_str()
-        .ok_or("Codex is not signed in with ChatGPT: run `codex login`, or use the OpenAI provider with an API key")?;
-    if expiry_ms(token).is_some_and(|at| at <= now_ms()) {
-        return Err("the Codex sign-in expired: open Codex to renew it".into());
+        .map(str::to_owned)
+        .ok_or("Codex is not signed in with ChatGPT: run `codex login`, or use the OpenAI provider with an API key".into())
+}
+
+fn refresh_codex() -> Option<()> {
+    let mut child = Command::new("codex")
+        .arg("app-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdin = child.stdin.take()?;
+    for request in [
+        json!({ "id": 1, "method": "initialize", "params": { "clientInfo": { "name": "diffr", "version": env!("CARGO_PKG_VERSION") } } }),
+        json!({ "method": "initialized" }),
+        json!({ "id": 2, "method": "account/read", "params": { "refreshToken": true } }),
+    ] {
+        writeln!(stdin, "{request}").ok()?;
     }
-    Ok(token.to_owned())
+    // Codex exits without answering once stdin closes.
+    BufReader::new(child.stdout.take()?)
+        .lines()
+        .map_while(Result::ok)
+        .any(|line| serde_json::from_str::<Value>(&line).is_ok_and(|reply| reply["id"] == 2));
+    drop(stdin);
+    child.wait().ok().map(drop)
 }
 
 /// A JWT's `exp`, in milliseconds.

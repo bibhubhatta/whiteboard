@@ -2,10 +2,12 @@ import { boardTitle } from "@dev.fast/review-protocol";
 import {
   type Element,
   ReviewInputError,
+  animationCode,
   elements,
   stepSources,
 } from "@dev.fast/whiteboard-document";
 
+import type { AnimationRun } from "./animation-runs.js";
 import type { Snapshot } from "./store.js";
 
 interface RelatedBoard {
@@ -24,6 +26,8 @@ export function documentText(
     children: RelatedBoard[];
     dependsOn: RelatedBoard[];
   },
+  /** Each animation's last run in a canvas, when this is the current version. */
+  runs?: ReadonlyMap<string, AnimationRun>,
 ): string {
   const target =
     targetId === undefined
@@ -197,13 +201,41 @@ export function documentText(
           );
         break;
       case "animation":
-        for (const [index, frame] of element.frames.entries())
+        for (const [index, frame] of element.frames.entries()) {
           detail(
             `Frame ${index + 1} [${frame.key}]: ${frame.title}${frame.caption ? ` — ${frame.caption}` : ""}`,
           );
 
-        for (const [name, anchor] of Object.entries(element.code))
-          detail(`Code ${name}: ${anchor}`);
+          if (frame.code) write(depth + 2, `Code: ${frame.code.join(", ")}`);
+
+          if (detailed && frame.data !== undefined)
+            write(depth + 2, `Data: ${JSON.stringify(frame.data)}`);
+        }
+
+        for (const scenario of element.scenarios ?? [])
+          detail(
+            `Scenario [${scenario.key}] ${scenario.label}: ${scenario.frames.join(" → ")}`,
+          );
+
+        if (runs) {
+          const run =
+            element.id === undefined ? undefined : runs.get(element.id);
+
+          write(
+            depth + 1,
+            run?.error
+              ? `Script error: ${run.error}`
+              : run
+                ? "Ran in an open whiteboard without a script error."
+                : "Not run yet: its script runs only where the whiteboard is open.",
+          );
+        }
+
+        for (const [name, entry] of Object.entries(element.code)) {
+          const { source, label } = animationCode(entry);
+
+          detail(`Code ${name}${label ? ` (${label})` : ""}: ${source}`);
+        }
 
         if (detailed) code(depth + 1, { language: "html", text: element.html });
         break;

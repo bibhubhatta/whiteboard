@@ -6,11 +6,10 @@ import { diagramStyles } from "@canvas/diagram-styles";
 import { useDiagramTourShell } from "@canvas/diagram-tour";
 import { drawStyles } from "@canvas/draw-styles";
 import { useOptionalReviewPanel } from "@canvas/review-panel";
+import type { SourcePeekAnchor } from "@canvas/review-panel-model";
 import {
   fontSize,
-  fontWeight,
   leading,
-  motion,
   radius,
   space,
   tracking,
@@ -26,8 +25,10 @@ import { useTooltip } from "@canvas/ui/tooltip";
 import {
   type Block,
   anchorSelection,
+  animationCode,
   animationCodeId,
 } from "@dev.fast/whiteboard-document";
+import { STAGE_KIT_CSS, STAGE_THEME } from "@review/animation-stage-kit";
 import * as stylex from "@stylexjs/stylex";
 import {
   type KeyboardEvent,
@@ -41,6 +42,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { useReportAnimationRun } from "./report-run";
 import {
   type HostMessage,
   STAGE_BOOT,
@@ -50,6 +52,7 @@ import {
   stageMessageSchema,
 } from "./stage-protocol";
 import { stageRuntime } from "./stage-runtime";
+import { SCALE } from "./stage-scale";
 
 // Read on demand: a Worker may lack import.meta.url.
 const stageUrl = () => new URL("./stage.html", import.meta.url).href;
@@ -95,57 +98,12 @@ const loadFonts = () =>
     });
   })());
 
-const steps = (group: string, values: Record<string, string>) =>
-  Object.entries(values).map(([step, value]) => [`${group}-${step}`, value]);
-
-// The canvas scale a stage reads as --wb-<group>-<step>: --wb-space-12,
-// --wb-radius-surface, --wb-text-body. Space steps drop their leading "s".
-const SCALE: Record<string, string> = Object.fromEntries([
-  ...Object.entries(space).map(([step, value]) => [
-    `space-${step.slice(1)}`,
-    value,
-  ]),
-  ...steps("radius", radius),
-  ...steps("text", fontSize),
-  ...steps("leading", leading),
-  ...steps("weight", fontWeight),
-  ...steps("tracking", tracking),
-  ...steps("motion", motion),
-]);
-
-// The canvas properties a stage reads as --wb-<name>.
-const THEME = {
-  ink: "--ink",
-  "ink-muted": "--ink-muted",
-  "ink-faint": "--ink-faint",
-  accent: "--accent",
-  "accent-soft": "--accent-soft",
-  "on-accent": "--on-accent",
-  surface: "--surface",
-  "surface-raised": "--surface-raised",
-  well: "--well",
-  rule: "--rule",
-  "rule-soft": "--rule-soft",
-  added: "--change-added",
-  removed: "--change-removed",
-  modified: "--change-modified",
-  "added-bg": "--diff-added-bg",
-  "removed-bg": "--diff-removed-bg",
-  "modified-bg": "--diff-modified-bg",
-  // Each face by its role: the chrome's for labels, mono for what a
-  // terminal would print, the reading face for prose, and the code font.
-  "font-sans": "--chrome-font",
-  "font-mono": "--font-mono",
-  "font-serif": "--font-serif",
-  "font-code": "--font-code",
-} as const;
-
 function readTheme(element: Element): Pick<StageInit, "theme" | "colorScheme"> {
   const computed = getComputedStyle(element);
 
   return {
     theme: Object.fromEntries(
-      Object.entries(THEME).map(([name, property]) => [
+      Object.entries(STAGE_THEME).map(([name, property]) => [
         name,
         computed.getPropertyValue(property).trim(),
       ]),
@@ -196,6 +154,9 @@ export function AnimationBlock({
   const [contentHeight, setContentHeight] = useState(120);
   const [slots, setSlots] = useState<SlotLayout[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  const reportRun = useReportAnimationRun(data.snapshot.reviewId, node.id);
+
   // The inline figure's height while it is out fullscreen, held by a
   // placeholder so the document keeps its place.
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -375,8 +336,10 @@ export function AnimationBlock({
         break;
       case "error":
         setError(message.message);
+        reportRun(message.message);
         break;
       case "ready":
+        reportRun(null);
         break;
     }
   };
@@ -437,13 +400,17 @@ export function AnimationBlock({
     const init: Omit<StageInit, "libraries" | "fonts"> = {
       type: "init",
       html: node.html,
+      kit: STAGE_KIT_CSS,
       autoSize: node.height === "auto",
-      frames: frames.map(({ key, title, caption }) => ({
+      frames: frames.map(({ key, title, caption, data, code }) => ({
         key,
         title,
         caption,
+        data,
+        code,
       })),
       code: Object.keys(node.code),
+      codeTitles: codeTitles(node, data.anchors),
       blocks: [...embeddable.keys()],
       ...readTheme(figure),
       scale: SCALE,
@@ -617,7 +584,7 @@ export function AnimationBlock({
                   ? node.code[slot.ref] && (
                       <CodePeekCard
                         source={anchorSelection(
-                          node.code[slot.ref]!,
+                          animationCode(node.code[slot.ref]!).source,
                           node.pins,
                         )}
                         heightMode="capped"
@@ -821,6 +788,28 @@ function ControlButton({
         {children}
       </svg>
     </IconButton>
+  );
+}
+
+/** What hovering a drawn element that opens code says: its label, file and
+ * lines. */
+function codeTitles(
+  node: BlockProps<"animation">["node"],
+  anchors: ReadonlyMap<string, SourcePeekAnchor>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(node.code).flatMap(([name, entry]) => {
+      const anchor = anchors.get(animationCodeId(node.id, name));
+
+      if (!anchor) return [];
+      const { file, start, end } = anchor.peek;
+      const label = animationCode(entry).label ?? name;
+
+      const lines =
+        start.line === end.line ? `${start.line}` : `${start.line}–${end.line}`;
+
+      return [[name, `${label} · ${file.split("/").at(-1)}:${lines}`]];
+    }),
   );
 }
 

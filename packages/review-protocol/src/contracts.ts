@@ -584,8 +584,8 @@ export interface ReviewSidebarSectionProps {
     | "lenses"
     | "remaining";
   connection: { serverUrl: string; token: string };
-  /** The board in the active tab; "" beside Settings, where only Recent
-   * mounts. */
+  /** The board in the active tab; "" beside Settings or Release notes,
+   * where only Recent mounts. */
   reviewId: string;
   onOpenBoard(reviewId: string, active: boolean): void;
   /** Whiteboards: the board's project and its boards, from Desktop's
@@ -890,6 +890,9 @@ export interface ReviewCanvasSettingsContent {
   ): Promise<ReviewReadyNotificationChoice>;
   softwareMapEnabled: boolean;
   setSoftwareMapEnabled(enabled: boolean): Promise<boolean>;
+  // Backed by `update.showReleaseNotes`, as the Release notes tab's checkbox.
+  showReleaseNotes: boolean;
+  setShowReleaseNotes(enabled: boolean): Promise<boolean>;
   // Not a workbench setting: the review server reads it, so it lives in the
   // server preferences file. Off by default. On, agents can author
   // animations over MCP; off, existing animations still render.
@@ -1104,7 +1107,39 @@ export type ReviewCanvasContent =
   | {
       kind: "settings";
       settings: ReviewCanvasSettingsContent;
-    };
+    }
+  | { kind: "release-notes"; releaseNotes: ReviewCanvasReleaseNotes };
+
+/** The GitHub API's release fields the tab reads. */
+export interface ReviewCanvasRelease {
+  body: string;
+  published_at: string | null;
+}
+
+/** The Release notes tab: one version's GitHub release. */
+export interface ReviewCanvasReleaseNotes {
+  version: string;
+  // Rejects with a message the tab shows.
+  readRelease(): Promise<ReviewCanvasRelease>;
+  // Backed by the `update.showReleaseNotes` workbench setting.
+  showAfterUpdate: boolean;
+  setShowAfterUpdate(enabled: boolean): Promise<boolean>;
+}
+
+const WHITEBOARD_REPOSITORY = "devdotfast/whiteboard";
+
+export const WHITEBOARD_RELEASES_URL = `https://github.com/${WHITEBOARD_REPOSITORY}/releases`;
+
+/** A version's release page. diffr's releases share the repository, so a
+ * version is always looked up by its own tag, never as the latest. */
+export function whiteboardReleaseUrl(version: string): string {
+  return `${WHITEBOARD_RELEASES_URL}/tag/v${encodeURIComponent(version)}`;
+}
+
+/** The GitHub API's copy of a version's release, readable without a token. */
+export function whiteboardReleaseApiUrl(version: string): string {
+  return `https://api.github.com/repos/${WHITEBOARD_REPOSITORY}/releases/tags/v${encodeURIComponent(version)}`;
+}
 
 /** What Home shows; a new snapshot on every change. */
 export interface ReviewCanvasHomeData {

@@ -26,7 +26,6 @@ import { ILogService } from "../../../../platform/log/common/log.js";
 import { FocusMode } from "../../../../platform/native/common/native.js";
 import { INotificationService } from "../../../../platform/notification/common/notification.js";
 import { IProductService } from "../../../../platform/product/common/productService.js";
-import { IOpenerService } from "../../../../platform/opener/common/opener.js";
 import { IWorkbenchEnvironmentService } from "../../../../workbench/services/environment/common/environmentService.js";
 import { IEditorProgressService, LongRunningOperation } from "../../../../platform/progress/common/progress.js";
 import { IStorageService, StorageScope } from "../../../../platform/storage/common/storage.js";
@@ -67,9 +66,11 @@ import {
 	REVIEW_DIAGRAM_FULLSCREEN_ON_CLICK_SETTING,
 	REVIEW_KEYMAP_SETTING,
 	REVIEW_READY_NOTIFICATION_SETTING,
+	REVIEW_SHOW_RELEASE_NOTES_SETTING,
 	REVIEW_SOFTWARE_MAP_SETTING,
 	REVIEW_TELEMETRY_SETTING,
 } from "../../../common/reviewConfigurationDefaults.js";
+import { fetchWhiteboardRelease, REVIEW_SHOW_RELEASE_NOTES_COMMAND_ID } from "../../../common/reviewReleaseNotes.js";
 import { ReviewApiClient, type ReviewApiSummary, resolveReviewSourceView, reviewSourceAnchor, type ReviewSourceView, type ReviewSourceSelection } from "../../../common/reviewProtocol.js";
 import type {
 	ReviewCanvasBridge,
@@ -207,7 +208,6 @@ export class ReviewCanvasEditorPane extends EditorPane {
 		@IWorkbenchThemeService private readonly reviewThemeService: IWorkbenchThemeService,
 		@IStorageService private readonly storageService: IStorageService,
 		@IProductService private readonly productService: IProductService,
-		@IOpenerService private readonly openerService: IOpenerService,
 		@IWorkbenchEnvironmentService private readonly workbenchEnvironment: IWorkbenchEnvironmentService,
 		@IReviewDesktopConnectionService
 		private readonly desktopConnection: IReviewDesktopConnectionService,
@@ -686,6 +686,21 @@ export class ReviewCanvasEditorPane extends EditorPane {
 			await this.render({ kind: "settings", settings: { ...settings, install } }, generation);
 			return;
 		}
+		if (input.target.kind === "release-notes") {
+			const { version } = input.target;
+			this.renderedInput = input;
+			this.setCanvasState("home");
+			await this.render({
+				kind: "release-notes",
+				releaseNotes: {
+					version,
+					readRelease: () => fetchWhiteboardRelease(version),
+					showAfterUpdate: this.currentShowReleaseNotes(),
+					setShowAfterUpdate: (enabled) => this.setShowReleaseNotes(enabled),
+				},
+			}, generation);
+			return;
+		}
 	}
 
 	private notifyOpenFailure(error: unknown): void {
@@ -1066,6 +1081,8 @@ export class ReviewCanvasEditorPane extends EditorPane {
 				await this.configurationService.updateValue(REVIEW_SOFTWARE_MAP_SETTING, enabled, ConfigurationTarget.USER);
 				return this.currentSoftwareMapEnabled();
 			},
+			showReleaseNotes: this.currentShowReleaseNotes(),
+			setShowReleaseNotes: (enabled) => this.setShowReleaseNotes(enabled),
 			animationsEnabled: await this.desktopConnection.readAnimationsEnabled().catch(() => false),
 			setAnimationsEnabled: (enabled) => this.desktopConnection.setAnimationsEnabled(enabled),
 			remoteHosts: reviewRemoteHostsSettings({
@@ -1165,6 +1182,16 @@ export class ReviewCanvasEditorPane extends EditorPane {
 		return this.configurationService.getValue<boolean>(REVIEW_SOFTWARE_MAP_SETTING) === true;
 	}
 
+	private currentShowReleaseNotes(): boolean {
+		return this.configurationService.getValue<boolean>(REVIEW_SHOW_RELEASE_NOTES_SETTING) !== false;
+	}
+
+	private async setShowReleaseNotes(enabled: boolean): Promise<boolean> {
+		this.reviewTelemetryService.capture("setting_changed", { setting: "show_release_notes", enabled });
+		await this.configurationService.updateValue(REVIEW_SHOW_RELEASE_NOTES_SETTING, enabled, ConfigurationTarget.USER);
+		return this.currentShowReleaseNotes();
+	}
+
 	// The setting ships as true, so only an explicit false means opted out.
 	private currentTelemetryEnabled(): boolean {
 		return this.configurationService.getValue<boolean>(REVIEW_TELEMETRY_SETTING) !== false;
@@ -1222,7 +1249,7 @@ export class ReviewCanvasEditorPane extends EditorPane {
 					environment: !this.workbenchEnvironment.isBuilt ? "development" : this.productService.quality === "preview" ? "preview" : "production",
 					submit: response => this.desktopConnection.submitFeedback(response),
 					submitContact: contact => this.desktopConnection.submitFeedbackContact(contact),
-					openReleaseNotes: () => { void this.openerService.open("https://github.com/devdotfast/whiteboard/releases", { openExternal: true }); },
+					openReleaseNotes: () => void this.commandService.executeCommand(REVIEW_SHOW_RELEASE_NOTES_COMMAND_ID, undefined, "feedback"),
 				},
 				setupTooltip: this.setupTooltip,
 				notify: (notification) => showReviewNotification(this.notificationService, notification),
@@ -1528,4 +1555,3 @@ export class ReviewCanvasParts extends Disposable implements IReviewCanvasPartsS
 		this._register(instantiationService.createInstance(ReviewCanvasPlaceholderPart));
 	}
 }
-

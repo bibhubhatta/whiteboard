@@ -4,7 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * Review's update surface: two toasts, and a command to check on demand.
+ * Review's update surface: two toasts, and commands to check on demand and to
+ * show the release notes.
  *
  * Review deliberately omits the stock `workbench/contrib/update` — its title bar
  * entry depends on the chat service, which Review does not register. This is the
@@ -22,6 +23,8 @@ import { Disposable } from '../../../base/common/lifecycle.js';
 import { isLinux, isMacintosh } from '../../../base/common/platform.js';
 import Severity from '../../../base/common/severity.js';
 import { Action2, registerAction2 } from '../../../platform/actions/common/actions.js';
+import { ICommandService } from '../../../platform/commands/common/commands.js';
+import { IConfigurationService } from '../../../platform/configuration/common/configuration.js';
 import type { ServicesAccessor } from '../../../platform/instantiation/common/instantiation.js';
 import { IMainProcessService } from '../../../platform/ipc/common/mainProcessService.js';
 import { ILogService } from '../../../platform/log/common/log.js';
@@ -38,7 +41,12 @@ import {
 	shouldAnnounceDarwinFailedUpdate,
 } from '../../../platform/update/common/darwinUpdateRecovery.js';
 import { IUpdateService, StateType, type State } from '../../../platform/update/common/update.js';
+import { REVIEW_SHOW_RELEASE_NOTES_SETTING } from '../../common/reviewConfigurationDefaults.js';
 import { REVIEW_DESKTOP_CHANNEL } from '../../common/reviewDesktopBootstrap.js';
+import { WHITEBOARD_RELEASES_URL } from '../../common/reviewProtocol.js';
+import { fetchWhiteboardRelease, REVIEW_SHOW_RELEASE_NOTES_COMMAND_ID } from '../../common/reviewReleaseNotes.js';
+import { IReviewCanvasEditorTabsService } from '../../services/reviewCanvasEditorTabsService.js';
+import { IReviewTelemetryService } from '../../services/reviewTelemetryService.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../workbench/common/contributions.js';
 import {
 	decideUpdateNotice,
@@ -56,7 +64,20 @@ const STAGED_UPDATE_STORAGE_KEY = 'review.update.staged.v1';
 const SKIPPED_UPDATE_STORAGE_KEY = 'review.update.skipped.v1';
 /** Failed update attempt that Review already announced. */
 const FAILED_UPDATE_NOTICE_STORAGE_KEY = 'review.update.failedNotice.v1';
-const RELEASES_URL = 'https://github.com/devdotfast/whiteboard/releases';
+/** Release whose notes the tab last opened. */
+const SHOWN_RELEASE_NOTES_STORAGE_KEY = 'review.update.releaseNotesShown.v1';
+
+/** Releases opt into opening the tab after an update; the rest only toast. `<!-- whiteboard:show-notes 0.4.0 -->` opens 0.4.0's notes. */
+const SHOW_RELEASE_NOTES_MARKER = /<!-- whiteboard:show-notes(?: v?(\S+))? -->/;
+
+async function releaseNotesToOpen(version: string): Promise<string | undefined> {
+	try {
+		const match = (await fetchWhiteboardRelease(version)).body.match(SHOW_RELEASE_NOTES_MARKER);
+		return match ? match[1] ?? version : undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 class ReviewUpdateNotifications extends Disposable {
 
@@ -75,13 +96,14 @@ class ReviewUpdateNotifications extends Disposable {
 		@IStorageService private readonly storageService: IStorageService,
 		@IProductService private readonly productService: IProductService,
 		@ILogService private readonly logService: ILogService,
-		@IOpenerService private readonly openerService: IOpenerService,
 		@IMainProcessService private readonly mainProcessService: IMainProcessService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@ICommandService private readonly commandService: ICommandService,
 	) {
 		super();
 
 		this.announceFailedUpdate();
-		this.announceCompletedUpdate();
+		void this.announceCompletedUpdate();
 		this._register(this.storageService.onDidChangeValue(
 			StorageScope.APPLICATION,
 			DARWIN_FAILED_UPDATE_STORAGE_KEY,
@@ -123,13 +145,14 @@ class ReviewUpdateNotifications extends Disposable {
 	}
 
 	/**
-	 * If this launch is the first one on a build we staged, say so — once.
+	 * If this launch is the first one on a build we staged, say so — once: with
+	 * the Release notes tab when it is on and GitHub has notes, else a toast.
 	 *
 	 * The record is cleared whether or not it matched: a record for some other
 	 * build is stale (a hand-installed DMG, or an abandoned update) and should
 	 * disappear silently rather than linger and fire later.
 	 */
-	private announceCompletedUpdate(): void {
+	private async announceCompletedUpdate(): Promise<void> {
 		const staged = parseStagedUpdate(
 			this.storageService.get(STAGED_UPDATE_STORAGE_KEY, StorageScope.APPLICATION),
 		);
@@ -146,14 +169,21 @@ class ReviewUpdateNotifications extends Disposable {
 		// The update landed, so any skip recorded against it is spent.
 		this.storageService.remove(SKIPPED_UPDATE_STORAGE_KEY, StorageScope.APPLICATION);
 		this.logService.info(`[WhiteboardUpdate] running the staged update (${this.productService.commit})`);
+		const version = this.productService.reviewVersion ?? notice.productVersion;
+		const notes = version && this.configurationService.getValue<boolean>(REVIEW_SHOW_RELEASE_NOTES_SETTING) !== false && await releaseNotesToOpen(version);
+		if (notes && notes !== this.storageService.get(SHOWN_RELEASE_NOTES_STORAGE_KEY, StorageScope.APPLICATION)) {
+			this.storageService.store(SHOWN_RELEASE_NOTES_STORAGE_KEY, notes, StorageScope.APPLICATION, StorageTarget.MACHINE);
+			await this.commandService.executeCommand(REVIEW_SHOW_RELEASE_NOTES_COMMAND_ID, notes, 'update');
+			return;
+		}
 		this.notificationService.notify({
 			severity: Severity.Info,
 			message: notice.productVersion
 				? localize('review.update.applied', "Whiteboard updated to {0}.", notice.productVersion)
 				: localize('review.update.applied.unknownVersion', "Whiteboard has been updated."),
 			actions: { primary: [toAction({
-				id: 'review.update.releaseNotes', label: localize('review.update.releaseNotes', "Release Notes"),
-				run: () => this.openerService.open(RELEASES_URL, { openExternal: true }),
+				id: 'review.update.releaseNotes', label: localize('review.update.whatsNew', "What's New"),
+				run: () => this.commandService.executeCommand(REVIEW_SHOW_RELEASE_NOTES_COMMAND_ID, version, 'toast'),
 			})] },
 		});
 	}
@@ -315,7 +345,29 @@ class ReviewCheckForUpdatesAction extends Action2 {
 	}
 }
 
+class ReviewShowReleaseNotesAction extends Action2 {
+
+	constructor() {
+		super({
+			id: REVIEW_SHOW_RELEASE_NOTES_COMMAND_ID,
+			title: localize2('review.showReleaseNotes', "Whiteboard: Show Release Notes"),
+			f1: true,
+		});
+	}
+
+	async run(accessor: ServicesAccessor, version?: unknown, via: unknown = 'command'): Promise<void> {
+		const shown = typeof version === 'string' && version ? version : accessor.get(IProductService).reviewVersion;
+		if (!shown) {
+			await accessor.get(IOpenerService).open(WHITEBOARD_RELEASES_URL, { openExternal: true });
+			return;
+		}
+		accessor.get(IReviewTelemetryService).capture('release_notes_opened', { via: String(via), version: shown });
+		await accessor.get(IReviewCanvasEditorTabsService).openReleaseNotes(shown, true);
+	}
+}
+
 registerAction2(ReviewCheckForUpdatesAction);
+registerAction2(ReviewShowReleaseNotesAction);
 registerWorkbenchContribution2(
 	ReviewUpdateNotifications.ID,
 	ReviewUpdateNotifications,

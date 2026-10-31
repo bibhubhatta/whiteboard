@@ -893,6 +893,8 @@ export interface ReviewCanvasSettingsContent {
   // Backed by `update.showReleaseNotes`, as the Release notes tab's checkbox.
   showReleaseNotes: boolean;
   setShowReleaseNotes(enabled: boolean): Promise<boolean>;
+  updatePill: boolean;
+  setUpdatePill(enabled: boolean): Promise<boolean>;
   // Not a workbench setting: the review server reads it, so it lives in the
   // server preferences file. Off by default. On, agents can author
   // animations over MCP; off, existing animations still render.
@@ -1116,6 +1118,20 @@ export interface ReviewCanvasRelease {
   published_at: string | null;
 }
 
+/** An update waiting on a restart, or on Linux on the package manager. */
+export interface ReviewCanvasPendingUpdate {
+  version?: string;
+  action: "restart" | "instructions";
+}
+
+export interface ReviewCanvasUpdateHost {
+  /** The same object until the update changes. */
+  current(): ReviewCanvasPendingUpdate | undefined;
+  onDidChange(listener: () => void): ReviewDisposable;
+  /** Restarts into the update, or opens the package manager instructions. */
+  apply(): void;
+}
+
 /** The Release notes tab: one version's GitHub release. */
 export interface ReviewCanvasReleaseNotes {
   version: string;
@@ -1257,6 +1273,7 @@ export interface ReviewCanvasUi {
     ): Promise<ReviewFeedbackSubmissionResult>;
     openReleaseNotes(): void;
   };
+  update?: ReviewCanvasUpdateHost;
   setupTooltip?: ReviewCanvasBridge["setupTooltip"];
   /** Asks before deleting the boards with these titles. reviewIds let the
    * host name the whiteboards that link to them and the children that move
